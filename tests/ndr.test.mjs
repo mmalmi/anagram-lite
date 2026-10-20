@@ -92,6 +92,23 @@ test('real runtime DMs, reply/reaction/edit/delete rumors and persisted restart'
   }
   assert.ok(!bob.received.some((row) => row.event.id === receipt.id));
   assert.ok(network.filters.length > 0 && network.filters.every((filter) => filter.limit <= 200));
+  const publicIdentityKeys = new Set([
+    alice.owner, bob.owner,
+    ...[...network.events.values()].filter((event) => event.kind === 30078).flatMap((event) => [
+      event.pubkey,
+      ...event.tags.filter((tag) => tag[0] === 'ephemeralKey').map((tag) => tag[1]),
+    ]),
+  ]);
+  for (const event of [...network.events.values()].filter((event) => event.kind === 1060)) {
+    assert.ok(!publicIdentityKeys.has(event.pubkey), 'Message signer must not identify its sender through a public invite');
+  }
+  for (const filter of network.filters) {
+    if (!filter.kinds?.includes(1060)) continue;
+    for (const author of filter.authors ?? []) {
+      assert.ok(!publicIdentityKeys.has(author), 'Message filters must not disclose a peer identity or public invite key');
+    }
+  }
+
   if (device) assert.deepEqual(bob.storage.rows.get(device[0]), device[1]);
 });
 
@@ -107,8 +124,8 @@ test('signed outbox retries exact envelopes without blocking independent failure
   });
   t.after(() => owner.client.close());
   const secret = generateSecretKey();
-  const blocked = finalizeEvent({ kind: 1060, tags: [], content: 'offline', created_at: 1 }, secret);
-  const independent = finalizeEvent({ kind: 1060, tags: [], content: 'accepted', created_at: 2 }, secret);
+  const blocked = finalizeEvent({ kind: 1060, tags: [['v', '2'], ['header', 'test']], content: 'offline', created_at: 1 }, secret);
+  const independent = finalizeEvent({ kind: 1060, tags: [['v', '2'], ['header', 'test']], content: 'accepted', created_at: 2 }, secret);
   await owner.storage.put(`outbox/${blocked.id}`, { event: blocked });
   await owner.storage.put(`outbox/${independent.id}`, { event: independent });
   await owner.client.start();
@@ -152,4 +169,26 @@ test('closing during signer approval cannot persist or publish late authorizatio
   await assert.rejects(starting, /Account closed/);
   assert.equal(owner.storage.rows.size, count);
   assert.equal(network.events.size, 0);
+});
+
+
+test('upgrade quarantines old queued envelopes without deleting their stored records', { timeout: 20000 }, async (t) => {
+  const network = relay();
+  const owner = person(network);
+  t.after(() => owner.client.close());
+  const signer = generateSecretKey();
+  const legacy = [1059, 1060].map((kind) => finalizeEvent({
+    kind, tags: [['p', owner.owner]], content: 'old ciphertext', created_at: 1,
+  }, signer));
+  for (const event of legacy) await owner.storage.put(`outbox/${event.id}`, { event });
+  await owner.client.start();
+  await owner.client.retry();
+  await owner.client.retry();
+  for (const event of legacy) {
+    assert.equal(network.events.has(event.id), false, 'An old identity-linked event must never reach a relay');
+    assert.deepEqual(
+      await owner.storage.get(`outbox/${event.id}`),
+      JSON.parse(JSON.stringify({ event })),
+    );
+  }
 });

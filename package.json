@@ -9,6 +9,6 @@
   "devDependencies": {
     "esbuild": "0.25.12",
     "fake-indexeddb": "6.2.4",
-    "nostr-double-ratchet": "0.0.179"
+    "nostr-double-ratchet": "0.0.180"
   }
 }
