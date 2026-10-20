@@ -896,11 +896,11 @@ function startNdr() {
         return () => sub.close();
       },
       fetch: (filter) => transport.queryConfirmed('ndr', filter),
-      publish: async (event, context) => {
-        const recipient = context?.recipientOwnerPubkey;
-        const extra = recipient ? await inboxOf(recipient) : [];
+      publish: async (event) => {
         if (!active()) throw new Error('Account changed');
-        return transport.publish({ ndr: true, relays: extra }, event, signer);
+        // NDR registration and discovery use this same shared set. Do not look
+        // up a recipient's public relay list on the account's authenticated pool.
+        return transport.publish('ndr', event, signer);
       },
       receive: async (event, peer) => {
         if (!active()) throw new Error('Account changed');

@@ -9,6 +9,8 @@
   "devDependencies": {
     "esbuild": "0.25.12",
     "fake-indexeddb": "6.2.4",
-    "nostr-double-ratchet": "0.0.180"
+    "nostr-double-ratchet": "0.0.181",
+    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.19/nostr-pubsub-0.5.19.tgz",
+    "ws": "8.22.0"
   }
 }

@@ -14,7 +14,7 @@ test('ratchet scope includes current inbox and shared Iris relay without changin
   assert.ok(!transport.resolve('ndr').includes('wss://own.example'));
 });
 
-test('confirmed roster reads reject failed relays but accept genuine empty EOSE', async () => {
+test('confirmed public reads reject failed relays but accept genuine empty EOSE', async () => {
   const original = transport.pool.ensureRelay;
   let empty = false, closures = 0;
   transport.pool.ensureRelay = async () => ({ subscribe(_filters, callbacks) {
@@ -22,10 +22,10 @@ test('confirmed roster reads reject failed relays but accept genuine empty EOSE'
     return { close() { closures++; } };
   } });
   try {
-    await assert.rejects(transport.queryConfirmed('ndr', { kinds: [37368], limit: 10 }), /Connect to a relay/);
+    await assert.rejects(transport.queryConfirmed('app', { kinds: [1], limit: 10 }), /Connect to a relay/);
     empty = true;
-    assert.deepEqual(await transport.queryConfirmed('ndr', { kinds: [37368], limit: 10 }), []);
-    assert.equal(closures, transport.NDR_RELAYS.length * 2);
+    assert.deepEqual(await transport.queryConfirmed('app', { kinds: [1], limit: 10 }), []);
+    assert.equal(closures, transport.APP_RELAYS.length * 2);
   } finally { transport.pool.ensureRelay = original; }
 });
 
@@ -56,7 +56,7 @@ test('nostr-tools synthesized EOSE cannot authorize a silent connected relay', a
   };
   try {
     let settled = false;
-    const result = transport.queryConfirmed('ndr', { kinds: [37368], limit: 10 });
+    const result = transport.queryConfirmed('app', { kinds: [1], limit: 10 });
     result.then(() => { settled = true; }, () => { settled = true; });
     const rejected = assert.rejects(result, /Connect to a relay/);
     await Promise.resolve();
@@ -82,11 +82,11 @@ test('a WebSocket handshake that never opens reaches the connection deadline', a
     close() { this.closed = true; }
   };
   try {
-    const result = transport.queryConfirmed('ndr', { kinds: [37368], limit: 10 });
+    const result = transport.queryConfirmed('app', { kinds: [1], limit: 10 });
     const rejected = assert.rejects(result, /Connect to a relay/);
     await Promise.resolve();
     t.mock.timers.tick(4999);
-    assert.equal(sockets.length, transport.NDR_RELAYS.length);
+    assert.equal(sockets.length, transport.APP_RELAYS.length);
     assert.ok(sockets.every(socket => !socket.closed));
     t.mock.timers.tick(1);
     await rejected;

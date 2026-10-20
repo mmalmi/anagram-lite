@@ -124,8 +124,8 @@ test('signed outbox retries exact envelopes without blocking independent failure
   });
   t.after(() => owner.client.close());
   const secret = generateSecretKey();
-  const blocked = finalizeEvent({ kind: 1060, tags: [['v', '2'], ['header', 'test']], content: 'offline', created_at: 1 }, secret);
-  const independent = finalizeEvent({ kind: 1060, tags: [['v', '2'], ['header', 'test']], content: 'accepted', created_at: 2 }, secret);
+  const blocked = finalizeEvent({ kind: 1060, tags: [['v', '2'], ['header', 'test'], ['p', owner.owner]], content: 'offline', created_at: 1 }, secret);
+  const independent = finalizeEvent({ kind: 1060, tags: [['v', '2'], ['header', 'test'], ['p', owner.owner]], content: 'accepted', created_at: 2 }, secret);
   await owner.storage.put(`outbox/${blocked.id}`, { event: blocked });
   await owner.storage.put(`outbox/${independent.id}`, { event: independent });
   await owner.client.start();

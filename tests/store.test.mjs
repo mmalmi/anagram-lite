@@ -30,6 +30,27 @@ await build({
   outfile: 'work/store-test.mjs', bundle: true, format: 'esm', platform: 'browser',
   alias: { preact: './vendor/preact.mjs', 'preact/hooks': './vendor/hooks.mjs', '@preact/signals': './vendor/signals.mjs' },
   plugins: [{ name: 'runtime-test-port', setup(build) {
+    // UI flows keep their deterministic relay fixtures. A separate wire test
+    // exercises the production privacy factories with actual AUTH connections.
+    build.onResolve({ filter: /\/nostr-relay-privacy\.mjs$/ }, () => ({ path: 'privacy', namespace: 'privacy-test' }));
+    build.onLoad({ filter: /.*/, namespace: 'privacy-test' }, () => ({ contents: `
+      export { isPrivateRelayEvent, isRelayDiscoveryFilter, splitRelayDiscoveryFilters } from 'nostr-pubsub/private-relays';
+      export function createPrivateRelayPublisher() { return {
+        async publish(event, options) { await Promise.any(globalThis.ndrTestPublish(options.relays, event)); return { remoteAccepted: true }; },
+        async close() {}
+      }; }
+      export function createAnonymousRelayDiscovery() { return {
+        subscribe(filters, handlers, options) { return globalThis.ndrTestSubscribe(options.relays, filters[0], {
+          onevent: handlers.onEvent, oneose: () => handlers.onEose?.({ sources: [{ complete: true }] })
+        }); },
+        async query(filters, options) {
+          const events = filters.some(filter => filter.kinds?.includes(37368))
+            ? await Promise.all(options.relays.map(url => globalThis.ndrTestQuery(url, filters)))
+            : await Promise.all(filters.map(filter => globalThis.ndrTestRead(options.relays, filter)));
+          return { events: events.flat(), sources: [{ complete: true }] };
+        }, async close() {}
+      }; }
+    `, resolveDir: process.cwd() }));
     build.onResolve({ filter: /\/ndr\.js$/ }, () => ({ path: 'ndr', namespace: 'test' }));
     build.onLoad({ filter: /.*/, namespace: 'test' }, () => ({ contents: `
       import { AppKeys } from 'nostr-double-ratchet';
@@ -47,6 +68,17 @@ await build({
   } }],
 });
 const { store, nostr, clients, db, failStart, transport } = await import('../work/store-test.mjs');
+globalThis.ndrTestPublish = (...args) => transport.pool.publish(...args);
+globalThis.ndrTestSubscribe = (...args) => transport.pool.subscribe(...args);
+globalThis.ndrTestRead = (...args) => transport.pool.querySync(...args);
+globalThis.ndrTestQuery = async (url, filters) => {
+  const relay = await transport.pool.ensureRelay(url);
+  return new Promise((resolve, reject) => {
+    const events = [];
+    const sub = relay.subscribe(filters, { onevent: event => events.push(event),
+      oneose: () => { sub.close(); resolve(events); }, onclose: reject });
+  });
+};
 transport.pool.get = async () => null;
 transport.pool.querySync = async () => [];
 transport.pool.subscribe = (_relays, _filter, callbacks) => { queueMicrotask(() => callbacks.oneose?.()); return { close() {} }; };

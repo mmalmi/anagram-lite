@@ -20,7 +20,7 @@ table and regenerate the sums.
 ## Optional double-ratchet transport
 
 `nostr-double-ratchet.mjs` is a local browser bundle of
-[`nostr-double-ratchet@0.0.180`](https://www.npmjs.com/package/nostr-double-ratchet/v/0.0.180),
+[`nostr-double-ratchet@0.0.181`](https://www.npmjs.com/package/nostr-double-ratchet/v/0.0.181),
 exporting `NdrRuntime`, `AppKeys` and its persistent outbox/discovery helpers. It
 loads dynamically after activation or a verified compatible roster candidate.
 Ordinary NIP-17/room startup and negative discovery do not request it. The pinned
@@ -32,10 +32,20 @@ npm run vendor:ndr
 (cd vendor && shasum -a 256 -c SHA256SUMS)
 ```
 
-At this version the optional bundle is 270,707 bytes (78,108 bytes gzip). No
+At this version the optional bundle is 274,370 bytes (79,440 bytes gzip). No
 runtime CDN, additional service, worker or CSP relaxation is needed. License
 notices are in `ndr-LICENSES.txt` and `nostr-double-ratchet.mjs.LEGAL.txt`.
 
 This version derives a separate first-reply key for each handshake, so a public
 invite cannot identify the message signer. Older sessions must establish a new
 handshake. Old queued envelopes remain stored but are not sent again.
+
+`nostr-relay-privacy.mjs` bundles the narrow `nostr-pubsub/private-relays`
+entry point from `nostr-pubsub@0.5.19`. It is 84,947 bytes (29,183 bytes gzip).
+Double-ratchet sends and retries use fresh connections and anonymous relay
+authentication, including copies to the sender's linked devices. Public device
+and invite lookups, targeted profiles, and relay lists use separate anonymous
+connections scoped to one public key.
+The account's receiving pool and public publications stay separate. This
+transport module does not load the optional double-ratchet runtime during
+ordinary NIP-17 startup or negative discovery.

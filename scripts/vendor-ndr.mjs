@@ -12,7 +12,21 @@ await build({
   outfile: 'vendor/nostr-double-ratchet.mjs',
   legalComments: 'external',
 });
-const filename = 'nostr-double-ratchet.mjs';
-const hash = createHash('sha256').update(await readFile(`vendor/${filename}`)).digest('hex');
-const sums = (await readFile('vendor/SHA256SUMS', 'utf8')).split('\n').filter((line) => line && !line.endsWith(`  ${filename}`));
-await writeFile('vendor/SHA256SUMS', `${[...sums, `${hash}  ${filename}`].join('\n')}\n`);
+await build({
+  stdin: { contents: "export { createPrivateRelayPublisher, createAnonymousRelayDiscovery, isPrivateRelayEvent, isRelayDiscoveryFilter, splitRelayDiscoveryFilters } from 'nostr-pubsub/private-relays';", resolveDir: process.cwd() },
+  bundle: true,
+  minify: true,
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2022',
+  outfile: 'vendor/nostr-relay-privacy.mjs',
+  legalComments: 'external',
+});
+const filenames = ['nostr-double-ratchet.mjs', 'nostr-relay-privacy.mjs'];
+const sums = (await readFile('vendor/SHA256SUMS', 'utf8')).split('\n').filter((line) => line &&
+  !filenames.some(filename => line.endsWith(`  ${filename}`)));
+for (const filename of filenames) {
+  const hash = createHash('sha256').update(await readFile(`vendor/${filename}`)).digest('hex');
+  sums.push(`${hash}  ${filename}`);
+}
+await writeFile('vendor/SHA256SUMS', `${sums.join('\n')}\n`);
