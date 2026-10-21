@@ -35,7 +35,7 @@ const RELAY_WAIT = 6000;
 export const pool = new SimplePool({ enableReconnect: true });
 
 let ownRelays = []; // the account's inbox relays (kind 10050), set by the store
-let privatePublisher;
+const privatePublishers = new Set();
 let anonymousDiscovery;
 const isNdrScope = (scope) => scope === 'ndr' || scope?.ndr;
 const discovery = () => anonymousDiscovery ??= createAnonymousRelayDiscovery({ historyTimeoutMs: 5000 });
@@ -157,15 +157,18 @@ export const subscribe = (scope, filter, { onevent, oneose, onclose } = {}) => {
 // not where the recipient reads).
 export async function publish(scope, event, signer) {
   const relays = resolve(scope);
-  if (isNdrScope(scope) && isPrivateRelayEvent(event)) {
-    privatePublisher ??= createPrivateRelayPublisher();
-    const result = await privatePublisher.publish(event, { relays, requireAck: true, queue: false });
-    if (!result.remoteAccepted) throw new Error('No relay accepted the event.');
-    return event;
-  }
+  if (event.kind === 21117) throw new Error('Call controls require an encrypted session.');
   const required = scope?.peer ? uniq(scope.relays ?? []) : [];
   const onauth = signer ? (t) => signer.sign(t) : undefined;
-  const attempts = pool.publish(relays, event, { onauth }).map((p, i) => p.then(() => relays[i]));
+  const attempts = isPrivateRelayEvent(event) ? relays.map(async url => {
+    const sender = createPrivateRelayPublisher();
+    privatePublishers.add(sender);
+    try {
+      const result = await sender.publish(event, { relays: [url], requireAck: true, queue: false });
+      if (!result.remoteAccepted) throw new Error('No relay accepted the event.');
+      return url;
+    } finally { privatePublishers.delete(sender); await sender.close(); }
+  }) : pool.publish(relays, event, { onauth }).map((p, i) => p.then(() => relays[i]));
   const needed = required.length ? attempts.filter((_, i) => required.includes(relays[i])) : attempts;
   try {
     await Promise.any(needed.length ? needed : attempts);
@@ -236,9 +239,8 @@ export function setAuthSigner(signer) {
 // Drop every connection and cursor: used when switching accounts, since open
 // connections carry the old account's AUTH and would link the two.
 export function reset() {
-  void privatePublisher?.close();
+  for (const sender of privatePublishers) void sender.close();
   void anonymousDiscovery?.close();
-  privatePublisher = undefined;
   anonymousDiscovery = undefined;
   pool.close([...pool.relays.keys()]);
   paging.clear();

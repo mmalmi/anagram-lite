@@ -285,7 +285,7 @@ test('Auto discovery and NDR fetch, subscription and publishing share Iris relay
       assert.deepEqual(actual.relays, transport.NDR_RELAYS);
     }
     assert.deepEqual(fetched, transport.NDR_RELAYS);
-    assert.ok(published.some((relays) => JSON.stringify(relays) === JSON.stringify(transport.NDR_RELAYS)));
+    assert.deepEqual(new Set(published.flat()), new Set(transport.NDR_RELAYS));
     close();
   } finally {
     Object.assign(transport.pool, original);

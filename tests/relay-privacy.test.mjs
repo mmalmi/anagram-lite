@@ -11,16 +11,18 @@ test('DR sends, sibling copies, retries and discovery use separate anonymous AUT
   await new Promise(resolve => server.once('listening', resolve));
   const url = `ws://127.0.0.1:${server.address().port}/`;
   const frames = [];
-  let serial = 0, rejectFirst = true;
+  let serial = 0, rejectFirst = true, declineRecipient = false;
   const secret = generateSecretKey(), owner = getPublicKey(secret);
   const peer = getPublicKey(generateSecretKey()), sibling = getPublicKey(generateSecretKey());
   const seal = recipient => Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true,
     generateSecretKey()).sendEvent({ kind: 14, content: 'private' }, [['p', recipient]]).event;
   const ownCopy = seal(sibling), peerCopy = seal(peer);
+  const legacyCall = finalizeEvent({ kind: 1059, created_at: Math.floor(Date.now() / 1000),
+    tags: [['p', peer]], content: 'sealed legacy private control' }, generateSecretKey());
   const ownerProof = finalizeEvent(new AppKeys([{ identityPubkey: owner, createdAt: Math.floor(Date.now() / 1000) }]).getEvent({ ownerPubkey: owner }), secret);
   const firstContact = (await Invite.createNew(peer, peer).accept(owner, secret, owner, ownerProof)).event;
-  const privateIds = new Set([ownCopy.id, peerCopy.id, firstContact.id]);
-  server.on('connection', socket => {
+  const privateIds = new Set([ownCopy.id, peerCopy.id, firstContact.id, legacyCall.id]);
+  server.on('connection', (socket, request) => {
     const connection = ++serial, challenge = `privacy-${connection}`;
     let authenticated = false;
     socket.send(JSON.stringify(['AUTH', challenge]));
@@ -32,7 +34,8 @@ test('DR sends, sibling copies, retries and discovery use separate anonymous AUT
         authenticated = verifyEvent(value) && value.kind === 22242 && value.tags.some(tag => tag[0] === 'challenge' && tag[1] === challenge);
         socket.send(JSON.stringify(['OK', value.id, authenticated, authenticated ? '' : 'auth-required: invalid']));
       } else if (command === 'EVENT') {
-        const accepted = authenticated && !(value.id === peerCopy.id && rejectFirst);
+        const accepted = authenticated && !(value.id === peerCopy.id && rejectFirst)
+          && !(declineRecipient && value.id === legacyCall.id && request.url === '/recipient');
         if (authenticated && value.id === peerCopy.id) rejectFirst = false;
         socket.send(JSON.stringify(['OK', value.id, accepted, accepted ? '' : authenticated ? 'blocked: retry' : 'auth-required: authenticate']));
       } else if (command === 'REQ') {
@@ -69,6 +72,15 @@ test('DR sends, sibling copies, retries and discovery use separate anonymous AUT
     await transport.publish('ndr', finalizeEvent(Invite.createNew(owner, owner).getEvent(), secret), signer);
     await assert.rejects(transport.publish('ndr', peerCopy, signer));
     for (const event of [peerCopy, ownCopy, firstContact]) await transport.publish('ndr', event, signer);
+    await transport.publish({ peer, relays: [url] }, legacyCall, signer);
+    await transport.publish({ peer, relays: [url] }, legacyCall, signer);
+    declineRecipient = true;
+    await assert.rejects(transport.publish({ peer, relays: [`${url}recipient`] }, legacyCall, signer),
+      error => error.partial === true);
+    const bareCall = finalizeEvent({ kind: 21117, created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', peer]], content: 'private control' }, secret);
+    await assert.rejects(transport.publish({ peer, relays: [url] }, bareCall, signer), /encrypted session/);
+    assert.ok(!frames.some(({ message }) => message[0] === 'EVENT' && message[1].id === bareCall.id));
     const privateConnections = new Set(frames.filter(({ message }) => message[0] === 'EVENT' && privateIds.has(message[1].id)).map(frame => frame.connection));
     assert.ok(privateConnections.size >= 4);
     const authKeys = new Set();
