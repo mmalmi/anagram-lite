@@ -13,7 +13,7 @@ await build({
   legalComments: 'external',
 });
 await build({
-  stdin: { contents: "export { createPrivateRelayPublisher, createAnonymousRelayDiscovery, isPrivateRelayEvent, isRelayDiscoveryFilter, splitRelayDiscoveryFilters } from 'nostr-pubsub/private-relays';", resolveDir: process.cwd() },
+  stdin: { contents: "export { createPrivateRelayPublisher, isPrivateRelayEvent, isRelayDiscoveryFilter, splitRelayDiscoveryFilters } from 'nostr-pubsub/private-relays'; export { createAnonymousRelayDiscovery } from './scripts/anonymousRelayDiscovery.ts';", resolveDir: process.cwd() },
   bundle: true,
   minify: true,
   format: 'esm',
