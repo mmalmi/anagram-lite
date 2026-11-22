@@ -41,7 +41,7 @@ invite cannot identify the message signer. Older sessions must establish a new
 handshake. Old queued envelopes remain stored but are not sent again.
 
 `nostr-relay-privacy.mjs` bundles the narrow `nostr-pubsub/private-relays`
-entry point from `nostr-pubsub@0.5.40`. It is 95,275 bytes (32,927 bytes gzip).
+entry point from `nostr-pubsub@0.5.41`. It is 95,064 bytes (32,880 bytes gzip).
 Double-ratchet sends and retries use fresh connections and anonymous relay
 authentication, including copies to the sender's linked devices. Public device
 and invite lookups, targeted profiles, and relay lists use separate anonymous
