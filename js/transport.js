@@ -36,6 +36,7 @@ export const pool = new SimplePool({ enableReconnect: true });
 
 let ownRelays = []; // the account's inbox relays (kind 10050), set by the store
 const privatePublishers = new Set();
+const ratchetSubscriptions = new Set();
 let anonymousDiscovery;
 const isNdrScope = (scope) => scope === 'ndr' || scope?.ndr;
 const discovery = () => anonymousDiscovery ??= createAnonymousRelayDiscovery({ historyTimeoutMs: 5000 });
@@ -121,8 +122,74 @@ export async function queryConfirmed(scope, filter) {
   return available.flatMap((result) => result.value);
 }
 
+// Invite replies need their recipient key's AUTH on a separate connection.
+// A relay may close the first private REQ before connection AUTH finishes.
+// Restore that relay once after AUTH, including relays that prefix the reason
+// with ERROR. Do not wait for every other relay to fail before recovering it.
+function subscribeRatchet(filter, relays, { onevent, oneose, onclose, onauth }) {
+  let closed = false, eosed = false;
+  const receiver = new SimplePool({ enableReconnect: true });
+  receiver.automaticallyAuth = () => async event => {
+    if (closed) throw new Error('Invite reception closed');
+    const signed = await onauth(event);
+    if (closed) throw new Error('Invite reception closed');
+    return signed;
+  };
+  const opened = new Set(), ready = new Set(), failed = new Map(), seen = new Set();
+  const subscription = { close() {
+    closed = true;
+    ratchetSubscriptions.delete(subscription);
+    for (const sub of opened) sub.close();
+    opened.clear();
+    receiver.close([...receiver.relays.keys()]);
+  } };
+  ratchetSubscriptions.add(subscription);
+  for (const url of relays) {
+    const fail = reason => {
+      if (closed) return;
+      failed.set(url, { url, reason });
+      if (failed.size === relays.length) onclose?.([...failed.values()]);
+    };
+    void receiver.ensureRelay(url, { connectionTimeout: 5000 }).then(relay => {
+      let retried = false;
+      const open = () => {
+        if (closed) return;
+        let sub;
+        sub = relay.subscribe([filter], {
+          onevent: event => {
+            if (closed || seen.has(event.id)) return;
+            seen.add(event.id);
+            if (seen.size > 4096) seen.delete(seen.values().next().value);
+            onevent?.(event);
+          },
+          oneose: () => {
+            if (closed) return;
+            ready.add(url);
+            if (!eosed && ready.size === relays.length) { eosed = true; oneose?.(); }
+          },
+          onclose: reason => {
+            opened.delete(sub);
+            if (closed) return;
+            if (!retried && relay.onauth && /^(?:ERROR:\s*)?auth-required:/i.test(reason)) {
+              retried = true;
+              void relay.auth(relay.onauth).then(open).catch(() => fail(reason));
+            } else fail(reason);
+          },
+        });
+        opened.add(sub);
+      };
+      open();
+    }).catch(error => fail(error.message));
+  }
+  return subscription;
+}
+
+const subscribeReceiver = (scope, filter, handlers) => isNdrScope(scope) && handlers.onauth
+  ? subscribeRatchet(filter, resolve(scope), handlers)
+  : pool.subscribe(resolve(scope), filter, handlers);
+
 // Live subscription; returns { close() }.
-export const subscribe = (scope, filter, { onevent, oneose, onclose } = {}) => {
+export const subscribe = (scope, filter, { onevent, oneose, onclose, onauth } = {}) => {
   const split = splitRelayDiscoveryFilters([filter]);
   if (split.discovery.length) {
     let closed = false;
@@ -142,13 +209,13 @@ export const subscribe = (scope, filter, { onevent, oneose, onclose } = {}) => {
           else onclose?.();
         },
       }, { relays: resolve(scope), cache: 'network-only' }));
-      for (const [index, filter] of split.receiver.entries()) opened.push(pool.subscribe(resolve(scope), filter, {
-        onevent, oneose: () => completed(split.discovery.length + index),
+      for (const [index, filter] of split.receiver.entries()) opened.push(subscribeReceiver(scope, filter, {
+        onevent, oneose: () => completed(split.discovery.length + index), onauth,
       }));
     } catch (error) { opened.forEach(sub => sub.close()); throw error; }
     return { close() { closed = true; opened.forEach(sub => sub.close()); } };
   }
-  return pool.subscribe(resolve(scope), filter, { onevent, oneose });
+  return subscribeReceiver(scope, filter, { onevent, oneose, onclose, onauth });
 };
 
 // Publish to every relay in scope and resolve as soon as one accepts (the rest carry on).
@@ -239,6 +306,7 @@ export function setAuthSigner(signer) {
 // Drop every connection and cursor: used when switching accounts, since open
 // connections carry the old account's AUTH and would link the two.
 export function reset() {
+  for (const subscription of ratchetSubscriptions) subscription.close();
   for (const sender of privatePublishers) void sender.close();
   void anonymousDiscovery?.close();
   anonymousDiscovery = undefined;

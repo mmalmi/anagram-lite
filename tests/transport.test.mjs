@@ -2,6 +2,77 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as transport from '../js/transport.js';
 import { Subscription } from 'nostr-tools/abstract-relay';
+import { WebSocketServer } from 'ws';
+import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools';
+
+test('ratchet handshake subscription recovers once after relay AUTH and stops on close', { timeout: 10000 }, async () => {
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise(resolve => server.once('listening', resolve));
+  const url = `ws://127.0.0.1:${server.address().port}/`;
+  const secret = generateSecretKey(), inviteSecret = generateSecretKey(), recipient = getPublicKey(inviteSecret);
+  const onauth = async event => finalizeEvent(event, inviteSecret);
+  const handshake = finalizeEvent({ kind: 1059, created_at: Math.floor(Date.now() / 1000),
+    tags: [['p', recipient], ['v', '2']], content: 'encrypted handshake' }, generateSecretKey());
+  const requests = new Map();
+  server.on('connection', socket => {
+    let authenticated = false;
+    socket.send(JSON.stringify(['AUTH', 'test-challenge']));
+    socket.on('message', bytes => {
+      const [verb, value, filter] = JSON.parse(String(bytes));
+      if (verb === 'AUTH') {
+        authenticated = value.pubkey === recipient;
+        socket.send(JSON.stringify(['OK', value.id, authenticated, '']));
+      } else if (verb === 'REQ') {
+        const count = (requests.get(filter.limit) ?? 0) + 1;
+        requests.set(filter.limit, count);
+        // Match the public relay's rejection, including its ERROR prefix. AUTH
+        // completion alone does not restore this closed subscription.
+        if (count === 1 || filter.limit === 2) socket.send(JSON.stringify([
+          'CLOSED', value, 'ERROR: auth-required: requested filter requires authentication',
+        ]));
+        else if (authenticated) {
+          socket.send(JSON.stringify(['EVENT', value, handshake]));
+          socket.send(JSON.stringify(['EOSE', value]));
+        }
+      }
+    });
+  });
+  const original = [...transport.NDR_RELAYS];
+  transport.NDR_RELAYS.splice(0, transport.NDR_RELAYS.length, url);
+  transport.setAuthSigner({ sign: async event => finalizeEvent(event, secret) });
+  const subscriptions = [];
+  try {
+    const received = new Promise(resolve => subscriptions.push(transport.subscribe('ndr',
+      { kinds: [1059], '#p': [recipient], limit: 1 }, { onevent: resolve, onauth })));
+    const delivered = await Promise.race([received, new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Handshake subscription was not restored')), 1500))]);
+    assert.equal(delivered.id, handshake.id);
+    assert.equal(requests.get(1), 2);
+
+    await new Promise(resolve => subscriptions.push(transport.subscribe('ndr',
+      { kinds: [1059], '#p': [recipient], limit: 2 }, { onclose: resolve, onauth })));
+    assert.equal(requests.get(2), 2, 'a repeated rejection must not loop');
+
+    // Closing while AUTH is pending must not reopen an account subscription.
+    let release, asked;
+    const pending = new Promise(resolve => { asked = resolve; });
+    const sub = transport.subscribe('ndr', { kinds: [1059], '#p': [recipient], limit: 3 }, {
+      onauth: event => { asked(); return new Promise(resolve => { release = () => resolve(onauth(event)); }); },
+    });
+    subscriptions.push(sub);
+    await pending;
+    transport.reset();
+    release();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(requests.get(3), 1);
+  } finally {
+    subscriptions.forEach(sub => sub.close());
+    transport.reset();
+    transport.NDR_RELAYS.splice(0, transport.NDR_RELAYS.length, ...original);
+    for (const socket of server.clients) socket.terminate();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
 
 test('ratchet scope includes current inbox and shared Iris relay without changing ordinary scopes', () => {
   transport.setOwnRelays(['wss://own.example']);

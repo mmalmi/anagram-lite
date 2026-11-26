@@ -891,8 +891,8 @@ function startNdr() {
         if (!active()) throw new Error('Account changed');
         return signer.sign(event);
       },
-      subscribe: (filter, callback) => {
-        const sub = transport.subscribe('ndr', filter, { onevent: callback });
+      subscribe: (filter, callback, onauth) => {
+        const sub = transport.subscribe('ndr', filter, { onevent: callback, onauth });
         return () => sub.close();
       },
       fetch: (filter) => transport.queryConfirmed('ndr', filter),

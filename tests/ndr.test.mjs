@@ -62,6 +62,29 @@ function rumor(owner, peer, content, kind = 14, tags = []) {
   return { ...event, id: getEventHash(event) };
 }
 
+test('invite reception authenticates as its recipient and cannot sign after logout', async () => {
+  const network = relay(), receivers = [];
+  const owner = person(network, {
+    subscribe: (filter, callback, onauth) => {
+      if (onauth) receivers.push({ filter, onauth });
+      return network.subscribe(filter, callback);
+    },
+  });
+  try {
+    await owner.client.start();
+    assert.ok(receivers.length > 0);
+    for (const { filter, onauth } of receivers) {
+      assert.deepEqual(filter.kinds, [1059]);
+      const signed = await onauth({ kind: 22242, created_at: Math.floor(Date.now() / 1000),
+        content: '', tags: [['relay', 'wss://relay.example'], ['challenge', 'fixture']] });
+      assert.equal(signed.pubkey, filter['#p'][0]);
+      assert.notEqual(signed.pubkey, owner.owner);
+      await assert.rejects(onauth({ kind: 1 }), /Expected relay authentication/);
+    }
+  } finally { await owner.client.close(); }
+  await assert.rejects(receivers[0].onauth({ kind: 22242 }), /Account closed/);
+});
+
 test('real runtime DMs, reply/reaction/edit/delete rumors and persisted restart', { timeout: 45000 }, async (t) => {
   const network = relay();
   const alice = person(network);

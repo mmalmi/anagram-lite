@@ -1,7 +1,7 @@
 // Optional transport. Loaded only after activation or a verified compatible roster candidate.
 // The host owns relays and storage; the library owns device authorization and sessions.
 import { NdrRuntime, createPersistentNostrOutbox, buildAppKeysFilter, AppKeys } from '../vendor/nostr-double-ratchet.mjs';
-import { getEventHash, verifyEvent } from '../vendor/nostr-tools.mjs';
+import { finalizeEvent, getEventHash, verifyEvent } from '../vendor/nostr-tools.mjs';
 
 export const hasNdrDevices = (event) => AppKeys.fromEvent(event).getAllDevices().some((device) => /^[a-f0-9]{64}$/.test(device.identityPubkey));
 
@@ -48,7 +48,17 @@ export function createNdrClient({ owner, sign, storage, subscribe, fetch, publis
     nostrFetch: (filter) => { assertOpen(); return fetch(bounded(filter)); },
     nostrSubscribe: (filter, callback) => {
       assertOpen();
-      return subscribe(bounded(filter), (event) => { if (!closed) callback(event); });
+      const invite = runtime.getDelegateManager()?.getInvite();
+      const ownInvite = filter.kinds?.length === 1 && filter.kinds[0] === 1059 &&
+        filter['#p']?.length === 1 && filter['#p'][0] === invite?.inviterEphemeralPublicKey;
+      // Gift-wrap relays only return events addressed to the AUTH key. Use our
+      // invite's key on an isolated receive connection, never the account signer.
+      const onauth = ownInvite && invite.inviterEphemeralPrivateKey ? async (event) => {
+        assertOpen();
+        if (event.kind !== 22242) throw new Error('Expected relay authentication');
+        return finalizeEvent(event, invite.inviterEphemeralPrivateKey);
+      } : undefined;
+      return subscribe(bounded(filter), (event) => { if (!closed) callback(event); }, onauth);
     },
     nostrEnqueue: outbox.enqueue,
     nostrPublish: outbox.publish,
